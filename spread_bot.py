@@ -52,8 +52,11 @@ load_dotenv()
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
-GAMMA_API = "https://gamma-api.polymarket.com"
-CLOB_API  = "https://clob.polymarket.com"
+GAMMA_API   = "https://gamma-api.polymarket.com"
+CLOB_API    = "https://clob.polymarket.com"
+BINANCE_API = "https://api.binance.com"
+
+SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
 
 MARKETS = {
     "btc-updown-5m": "BTC",
@@ -164,6 +167,78 @@ def best_bid(book: dict):
     return float(highest["price"]), float(highest["size"])
 
 
+ENTRY_MIN_DELTA_PCT = 0.06  # % move required from the ending window's own open
+                             # before its direction is trusted as a signal for
+                             # the NEXT window. Starting point is informed by
+                             # real validated data from the delta bot (0.06%
+                             # eliminated its one real loss while preserving
+                             # 68/68 wins in that sample) — but this is a
+                             # DIFFERENT question (predicting the next window
+                             # vs filtering entries within the same window),
+                             # so this value still needs its own validation
+                             # against this bot's real dry-run data.
+
+
+def get_entry_signal(crypto: str) -> dict:
+    """
+    Looks at the window that's about to close: how far has price moved from
+    THAT window's own open (magnitude, as a %), and does the last ~2 minutes
+    of momentum agree with that direction? Both must agree, and the
+    magnitude must clear ENTRY_MIN_DELTA_PCT, or this window is skipped
+    entirely — this bot is meant to take FEWER, more selective trades, not
+    force an entry into every window.
+
+    Returns a dict with the decision and the raw numbers, for full logging —
+    same transparency the delta bot's skip/enter reasoning always had.
+    """
+    symbol = SYMBOLS.get(crypto)
+    result = {"side": None, "delta_pct": 0.0, "momentum_agrees": False, "reason": ""}
+    if not symbol:
+        result["reason"] = "no symbol mapping"
+        return result
+
+    try:
+        # Last 5 one-minute candles ≈ the closing 5-minute window's own span,
+        # giving us that window's own open price to measure magnitude from —
+        # the same delta_pct concept as the delta bot, applied here to predict
+        # the NEXT window instead of filtering entries within this one.
+        r = requests.get(
+            f"{BINANCE_API}/api/v3/klines",
+            params={"symbol": symbol, "interval": "1m", "limit": 5},
+            timeout=3,
+        )
+        r.raise_for_status()
+        candles = r.json()
+    except Exception as e:
+        result["reason"] = f"binance error: {e}"
+        return result
+
+    if len(candles) < 5:
+        result["reason"] = "insufficient candle data"
+        return result
+
+    window_open    = float(candles[0][1])   # open of the oldest candle in this span
+    current_price  = float(candles[-1][4])  # close of the most recent candle
+    prev_close     = float(candles[-2][4])
+    delta_pct      = abs(current_price - window_open) / window_open * 100
+    magnitude_dir  = "Up" if current_price > window_open else "Down"
+    momentum_dir   = "Up" if current_price > prev_close else "Down"
+
+    result["delta_pct"]       = round(delta_pct, 4)
+    result["momentum_agrees"] = (magnitude_dir == momentum_dir)
+
+    if delta_pct < ENTRY_MIN_DELTA_PCT:
+        result["reason"] = f"delta {delta_pct:.4f}% < {ENTRY_MIN_DELTA_PCT}% — too weak to trust"
+        return result
+    if magnitude_dir != momentum_dir:
+        result["reason"] = f"magnitude says {magnitude_dir} but recent momentum says {momentum_dir} — disagreement, skipping"
+        return result
+
+    result["side"]   = magnitude_dir
+    result["reason"] = f"delta {delta_pct:.4f}% and momentum both agree on {magnitude_dir}"
+    return result
+
+
 def next_window_start(now: float) -> int:
     """Returns the unix timestamp of the next 5-minute boundary."""
     return int((now // 300) + 1) * 300
@@ -173,6 +248,7 @@ def next_window_start(now: float) -> int:
 
 CSV_FIELDS = [
     "timestamp", "bot_name", "mode", "crypto", "slug",
+    "target_side", "signal_delta_pct", "signal_reason",
     "buy_result", "buy_price", "buy_shares", "buy_elapsed_ms",
     "num_opportunities", "sell_result", "sell_price",
     "pnl_usd", "notes",
@@ -243,7 +319,7 @@ class SpreadBot:
         elapsed time in milliseconds from window_open_time.
         """
         crypto = market["crypto"]
-        token  = market["down_token"]
+        token  = market["target_token"]
 
         if self.dry_run:
             # Poll the REAL live order book repeatedly for up to BUY_TIMEOUT_SEC,
@@ -363,7 +439,7 @@ class SpreadBot:
         no opportunity worked out.
         """
         crypto      = market["crypto"]
-        token       = market["down_token"]
+        token       = market["target_token"]
         close_ts    = market["close_ts"]
         buy_price   = buy_info["price"]
         shares      = buy_info["shares"]
@@ -496,6 +572,25 @@ class SpreadBot:
             log(f"Could not find market for window starting {start_ts} within 3s of open — skipping this window", crypto)
             return
 
+        # Decide which side to buy based on the ending window's own delta
+        # magnitude + momentum agreement, instead of always buying Down or
+        # falling back to Down when unsure. This bot is meant to take FEWER,
+        # more selective trades — if the signal isn't confident, we skip
+        # the window entirely rather than force a trade. This is a genuinely
+        # new, unvalidated hypothesis for THIS use case — it aims to reduce
+        # how OFTEN you're on the wrong side, but does NOT change what
+        # happens when the signal is wrong: a loss here is still close to
+        # full stake, same as before.
+        signal = get_entry_signal(crypto)
+        log(f"Entry signal: {signal['reason']}", crypto)
+        if signal["side"] is None:
+            log("Skipping this window — no confident signal", crypto)
+            return
+
+        target_side = signal["side"]
+        market["target_side"]  = target_side
+        market["target_token"] = market["down_token"] if target_side == "Down" else market["up_token"]
+
         buy_info = self._attempt_buy(market, window_open_time)
 
         row = {
@@ -503,6 +598,9 @@ class SpreadBot:
             "bot_name":    self.bot_name,
             "mode":        self.mode_str,
             "crypto":      crypto,
+            "target_side": target_side,
+            "signal_delta_pct": signal["delta_pct"],
+            "signal_reason": signal["reason"],
             "slug":        market["slug"],
             "buy_result":  buy_info["result"],
             "buy_price":   buy_info["price"],
