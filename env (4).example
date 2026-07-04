@@ -1,0 +1,16 @@
+# Environment variables — copy this file to .env and fill in your values
+# Never commit the real .env file to version control
+
+# Identifies this bot instance in trades_log.csv — set uniquely if running
+# multiple instances
+BOT_NAME=spread_bot1
+
+# Required for --live mode only
+POLY_PRIVATE_KEY=your_polygon_private_key_here
+POLY_PROXY_WALLET=your_polymarket_proxy_wallet_address_here
+
+# 0 = EOA wallet signing directly (rare)
+# 1 = Email/Magic login (Polymarket-hosted proxy wallet)
+# 2 = MetaMask/browser wallet connected via Polymarket (Gnosis Safe proxy)
+# 3 = POLY_1271 (deposit wallet, smart contract signature scheme)
+POLY_SIGNATURE_TYPE=3
