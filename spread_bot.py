@@ -56,8 +56,8 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API  = "https://clob.polymarket.com"
 
 MARKETS = {
-    "bitcoin-up-or-down-5m":  "BTC",
-    "ethereum-up-or-down-5m": "ETH",
+    "btc-updown-5m": "BTC",
+    "eth-updown-5m": "ETH",
 }
 
 BUY_TARGET_PRICE   = 0.50   # what we hope to pay
