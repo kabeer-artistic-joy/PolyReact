@@ -82,6 +82,9 @@ REACT_WAIT_SEC       = 3     # observe the new window for this long before decid
 REACT_BUY_TIMEOUT_SEC = 2    # then buy within this long, same cancel-if-unfilled logic
 REACT_BUY_CEILING    = 0.58  # wider than BUY_CEILING_PRICE — price may have already drifted further from 50c by the time we act
 REACT_PROFIT_MARGIN  = 0.09  # target this much profit per share above actual entry price (splits your suggested 0.08-0.10 range)
+REACT_MIN_DELTA_PCT  = 0.005 # minimum % move required in the 3s observation before trusting it as real direction, not noise.
+                              # Calibrated from your own BTC observation (~$2-5 real moves) — lands at ~$3.10 on BTC,
+                              # ~$0.09 on ETH (same relative move, different price scale — not a typo).
 
 POLL_INTERVAL_FAST = 0.05   # tight poll interval used right at window open (seconds)
 POLL_INTERVAL_SLOW = 1.0    # normal poll interval while watching for a 58-60c opportunity
@@ -302,19 +305,25 @@ def get_binance_price(symbol: str) -> float | None:
         return None
 
 
-def get_react_direction(crypto: str, price_at_open: float) -> str | None:
+def get_react_direction(crypto: str, price_at_open: float) -> tuple[str | None, float]:
     """
     Compares the current price to price_at_open (captured right when the
-    window opened) to decide Up or Down, for the "react" variant. Returns
-    None if price data is unavailable or the move is exactly flat.
+    window opened) to decide Up or Down, for the "react" variant. Requires
+    the move to clear REACT_MIN_DELTA_PCT, ruling out sub-cent noise being
+    treated with the same confidence as a real move. Returns (direction, pct)
+    — direction is None if data is unavailable, the move is flat, or it's
+    below the noise threshold.
     """
     symbol = SYMBOLS.get(crypto)
     if not symbol or price_at_open is None:
-        return None
+        return None, 0.0
     current = get_binance_price(symbol)
     if current is None or current == price_at_open:
-        return None
-    return "Up" if current > price_at_open else "Down"
+        return None, 0.0
+    pct = abs(current - price_at_open) / price_at_open * 100
+    if pct < REACT_MIN_DELTA_PCT:
+        return None, pct
+    return ("Up" if current > price_at_open else "Down"), pct
 
 
 def next_window_start(now: float) -> int:
@@ -788,12 +797,13 @@ class SpreadBot:
         while now_unix() < window_open_time + REACT_WAIT_SEC:
             time.sleep(0.1)
 
-        direction = get_react_direction(crypto, price_at_open)
+        direction, observed_pct = get_react_direction(crypto, price_at_open)
         if direction is None:
-            log("React: no clear direction after observation window — skipping", crypto)
+            log(f"React: no clear/strong-enough direction after observation window (moved {observed_pct:.4f}%, "
+                f"need {REACT_MIN_DELTA_PCT}%) — skipping", crypto)
             return
 
-        log(f"React: observed {direction} after {REACT_WAIT_SEC}s — buying {direction}", crypto)
+        log(f"React: observed {direction} ({observed_pct:.4f}%) after {REACT_WAIT_SEC}s — buying {direction}", crypto)
         market["target_side"]  = direction
         market["target_token"] = market["down_token"] if direction == "Down" else market["up_token"]
 
@@ -802,8 +812,8 @@ class SpreadBot:
 
         row = {
             "timestamp": ts_str(), "bot_name": self.bot_name, "mode": self.mode_str,
-            "crypto": crypto, "target_side": direction, "signal_delta_pct": "",
-            "signal_reason": f"react: observed {direction} after {REACT_WAIT_SEC}s",
+            "crypto": crypto, "target_side": direction, "signal_delta_pct": observed_pct,
+            "signal_reason": f"react: observed {direction} ({observed_pct:.4f}%) after {REACT_WAIT_SEC}s",
             "slug": market["slug"], "buy_result": buy_info["result"],
             "buy_price": buy_info["price"], "buy_shares": buy_info["shares"],
             "buy_elapsed_ms": round(buy_info["elapsed_ms"], 1),
