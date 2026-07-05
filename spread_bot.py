@@ -80,7 +80,7 @@ FORCE_EXIT_SECONDS_LEFT = 60  # in the final N seconds of the window, exit at an
 # that actual entry price, rather than fixed absolute floor/target prices.
 REACT_WAIT_SEC       = 4     # observe the new window for this long before deciding direction
 REACT_BUY_TIMEOUT_SEC = 2    # then buy within this long, same cancel-if-unfilled logic
-REACT_BUY_CEILING    = 0.58  # wider than BUY_CEILING_PRICE — price may have already drifted further from 50c by the time we act
+REACT_BUY_CEILING    = 0.62  # raised from 0.58 after real data showed a miss only 3c above that ceiling ($0.61 real ask vs $0.58 ceiling) — a small, evidence-backed nudge, not an unlimited ceiling
 REACT_PROFIT_MARGIN  = 0.07  # target this much profit per share above actual entry price (lowered from 0.09 to split the new 0.06-0.08 range, since waiting longer to enter means less exposure to the full move)
 REACT_MIN_DELTA_PCT  = 0.005 # minimum % move required in the 3s observation before trusting it as real direction, not noise.
                               # Calibrated from your own BTC observation (~$2-5 real moves) — lands at ~$3.10 on BTC,
