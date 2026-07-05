@@ -400,8 +400,14 @@ class SpreadBot:
 
         log("=" * 70)
         log(f"Down-Spread Scalper | {self.mode_str.upper()} | ${amount:.2f}/trade | bot_name={self.bot_name}")
-        log(f"Buy: target ${BUY_TARGET_PRICE} ceiling ${BUY_CEILING_PRICE} timeout {BUY_TIMEOUT_SEC}s")
-        log(f"Sell: target ${SELL_TARGET_PRICE} floor ${SELL_FLOOR_PRICE} | force-exit last {FORCE_EXIT_SECONDS_LEFT}s")
+        if self.variant == "react":
+            log(f"Variant: REACT | wait {REACT_WAIT_SEC}s to observe, then buy within {REACT_BUY_TIMEOUT_SEC}s, ceiling ${REACT_BUY_CEILING}")
+            log(f"Sell: entry price + ${REACT_PROFIT_MARGIN} margin | force-exit last {FORCE_EXIT_SECONDS_LEFT}s")
+            log(f"Min move to trust direction: {REACT_MIN_DELTA_PCT}%")
+        else:
+            log(f"Variant: PREDICT | Buy: target ${BUY_TARGET_PRICE} ceiling ${BUY_CEILING_PRICE} timeout {BUY_TIMEOUT_SEC}s")
+            log(f"Sell: target ${SELL_TARGET_PRICE} floor ${SELL_FLOOR_PRICE} | force-exit last {FORCE_EXIT_SECONDS_LEFT}s")
+            log(f"Min delta to trust direction: {ENTRY_MIN_DELTA_PCT}%")
         log(f"Trade log: {self.logger.path}")
         log("=" * 70)
 
