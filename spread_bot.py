@@ -78,10 +78,10 @@ FORCE_EXIT_SECONDS_LEFT = 60  # in the final N seconds of the window, exit at an
 # INTO the new window, watches its own real price action to decide direction,
 # then buys at whatever price results — targeting a fixed profit MARGIN from
 # that actual entry price, rather than fixed absolute floor/target prices.
-REACT_WAIT_SEC       = 3     # observe the new window for this long before deciding direction
+REACT_WAIT_SEC       = 5     # observe the new window for this long before deciding direction
 REACT_BUY_TIMEOUT_SEC = 2    # then buy within this long, same cancel-if-unfilled logic
 REACT_BUY_CEILING    = 0.58  # wider than BUY_CEILING_PRICE — price may have already drifted further from 50c by the time we act
-REACT_PROFIT_MARGIN  = 0.09  # target this much profit per share above actual entry price (splits your suggested 0.08-0.10 range)
+REACT_PROFIT_MARGIN  = 0.07  # target this much profit per share above actual entry price (lowered from 0.09 to split the new 0.06-0.08 range, since waiting longer to enter means less exposure to the full move)
 REACT_MIN_DELTA_PCT  = 0.005 # minimum % move required in the 3s observation before trusting it as real direction, not noise.
                               # Calibrated from your own BTC observation (~$2-5 real moves) — lands at ~$3.10 on BTC,
                               # ~$0.09 on ETH (same relative move, different price scale — not a typo).
@@ -181,7 +181,7 @@ def best_bid(book: dict):
     return float(highest["price"]), float(highest["size"])
 
 
-ENTRY_MIN_DELTA_PCT = 0.06  # % move required from the ending window's own open
+ENTRY_MIN_DELTA_PCT = 0.05  # % move required from the ending window's own open
                              # before its direction is trusted as a signal for
                              # the NEXT window. Starting point is informed by
                              # real validated data from the delta bot (0.06%
@@ -239,18 +239,19 @@ def get_entry_signal(crypto: str) -> dict:
     momentum_dir   = "Up" if current_price > prev_close else "Down"
 
     result["delta_pct"]       = round(delta_pct, 4)
-    result["momentum_agrees"] = (magnitude_dir == momentum_dir)
+    result["momentum_agrees"] = (magnitude_dir == momentum_dir)  # still computed and logged, just no longer gates the decision
     result["shadow_side"]     = magnitude_dir  # always set, regardless of confidence — used for shadow-tracking skipped windows
 
     if delta_pct < ENTRY_MIN_DELTA_PCT:
         result["reason"] = f"delta {delta_pct:.4f}% < {ENTRY_MIN_DELTA_PCT}% — too weak to trust"
         return result
-    if magnitude_dir != momentum_dir:
-        result["reason"] = f"magnitude says {magnitude_dir} but recent momentum says {momentum_dir} — disagreement, skipping"
-        return result
 
+    # Momentum agreement removed as a gate per explicit request — decision is
+    # now purely delta-magnitude-based. Not yet validated whether this
+    # helps or hurts; momentum_agrees is still logged so this can be
+    # checked against real outcomes later even though it no longer blocks entry.
     result["side"]   = magnitude_dir
-    result["reason"] = f"delta {delta_pct:.4f}% and momentum both agree on {magnitude_dir}"
+    result["reason"] = f"delta {delta_pct:.4f}% (momentum {'agreed' if result['momentum_agrees'] else 'disagreed'}, no longer gating)"
     return result
 
 
@@ -428,7 +429,8 @@ class SpreadBot:
         of window open. Returns a dict describing what happened, with real
         elapsed time in milliseconds from window_open_time.
         """
-        ceiling = ceiling if ceiling is None else ceiling
+        ceiling = BUY_CEILING_PRICE if ceiling is None else ceiling
+        timeout = BUY_TIMEOUT_SEC if timeout is None else timeout
         crypto = market["crypto"]
         token  = market["target_token"]
 
