@@ -444,9 +444,12 @@ class SpreadBot:
             # Poll the REAL live order book repeatedly for up to BUY_TIMEOUT_SEC,
             # looking for a real ask at or below our ceiling. No order is placed.
             deadline = window_open_time + timeout
+            last_seen_price = None
             while now_unix() < deadline:
                 book = get_order_book(token)
                 price, size = best_ask(book)
+                if price is not None:
+                    last_seen_price = price
                 elapsed_ms = (now_unix() - window_open_time) * 1000
                 if price is not None and price <= ceiling:
                     MIN_SHARES = 1  # NOT independently confirmed by Polymarket docs — this is a minimal safety floor only, not a verified exchange rule. The old "5" had no documented source and should not have been asserted with confidence. Test a real small live order to find the true threshold, if one exists.
@@ -460,7 +463,8 @@ class SpreadBot:
                     return {"result": "bought", "price": price, "shares": shares, "elapsed_ms": elapsed_ms}
                 time.sleep(POLL_INTERVAL_FAST)
             elapsed_ms = (now_unix() - window_open_time) * 1000
-            log(f"[DRY] BUY missed: no ask <= ${ceiling} within {timeout}s "
+            price_info = f"last real ask seen was ${last_seen_price:.3f}" if last_seen_price is not None else "no asks seen at all"
+            log(f"[DRY] BUY missed: no ask <= ${ceiling} within {timeout}s ({price_info}) "
                 f"(waited {elapsed_ms:.0f}ms)", crypto)
             return {"result": "missed", "price": None, "shares": 0, "elapsed_ms": elapsed_ms}
 
